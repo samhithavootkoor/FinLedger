@@ -1,3 +1,4 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'database.dart';
@@ -97,7 +98,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget build(BuildContext context) {
     final income = _rupees(summary['income']);
     final expense = _rupees(summary['expense']);
-    final transfers = _rupees(summary['transfers']);
     return Scaffold(
       appBar: AppBar(title: const Text('Financial reports')),
       body: loading ? const Center(child: CircularProgressIndicator()) : RefreshIndicator(
