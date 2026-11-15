@@ -205,7 +205,7 @@ class SmsImporter {
 
     final fingerprint = reference != null
         ? 'ref-${reference.toUpperCase()}'
-        : 'evt-${direction}-${amount.toStringAsFixed(2)}-${date ~/ 60000}-${(ownSuffix ?? 'na')}-${(destinationSuffix ?? upi ?? sender).toLowerCase()}';
+        : 'evt-$direction-${amount.toStringAsFixed(2)}-${date ~/ 60000}-${(ownSuffix ?? 'na')}-${(destinationSuffix ?? upi ?? sender).toLowerCase()}';
 
     return ParsedBankSms(
       body: body,
