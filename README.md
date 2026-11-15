@@ -1,85 +1,26 @@
 # FinLedger
 
-Offline-first Android personal finance ledger. Flutter UI + SQLite (sqflite), with a small Kotlin Android SMS receiver. No backend, cloud account, analytics SDK, or network permission is included.
+FinLedger is an offline-first Android bank-SMS transaction viewer.
 
-## Features in this starter build
-- Local SQLite transaction ledger
-- Manual income and expense entry
-- Month navigation and income/expense/net cash-flow summary
-- Category summary
-- Android SMS inbox import (up to 5,000 most recent inbox messages)
-- Incoming SMS receiver queues likely financial transaction messages locally
-- Duplicate protection using bank reference when available, otherwise a message/date/amount fingerprint
-- OTP-like messages are excluded from the incoming SMS queue
+## Scope
+- Imports bank transaction SMS from the Android inbox and receives new SMS through the Android receiver.
+- Extracts transaction amount, incoming/outgoing direction, bank, masked source account, transfer method, counterparty identifier and reference where present.
+- Shows a chronological transaction feed.
+- Filters by bank, payment type (UPI, IMPS, NEFT, RTGS, card, etc.), direction and date range.
+- Searches transaction descriptions, account identifiers and references.
+- Opens a detail view with extracted fields and the stored SMS text.
+- Stores data locally in SQLite. No backend or cloud account.
 
-## Important limitations
-- SMS formats differ by bank and may change. The parser is deliberately conservative and should be tested against redacted sample messages from the banks you use.
-- Automatic SMS reading requires Android SMS permissions. Google Play restricts SMS permissions; publication requires policy eligibility and approval. Sideloading also requires the user to grant permissions.
-- iOS does not provide equivalent unrestricted SMS inbox access.
-- This starter version does not yet reconcile balances, classify every bank format, or encrypt the SQLite database. Do not treat the calculated cash flow as the actual bank balance.
-- No app can recover SMS messages deleted before import. Make regular exports/backups before changing phones; an encrypted backup feature is a follow-up task.
+Loans, settlements, relationship management and financial-planning dashboards are intentionally outside the product scope.
 
-## Build APK with GitHub Actions
-1. Create a private GitHub repository and upload the contents of this folder.
-2. Push to `main`, or open **Actions → Build FinLedger APK → Run workflow**.
-3. When the workflow completes, download the `FinLedger-Android-APK` artifact.
-4. Extract `app-release.apk` and install it on your Android phone. Android will ask you to allow installation from that source.
+## Build APK using GitHub Actions
+1. Extract this ZIP.
+2. In your existing GitHub repository, replace the project files with the contents of the `FinLedger` folder (including `.github` and `android_overrides`).
+3. Commit and push to `main`.
+4. Open GitHub → Actions → Build FinLedger APK.
+5. When the workflow succeeds, download the `FinLedger-Android-APK` artifact and install the APK as an update over the existing app. Do not uninstall the existing app; its local SQLite data is stored on the device.
 
-The workflow creates Flutter's Android project scaffolding, restores the custom Kotlin SMS receiver and manifest, runs analysis, and builds the release APK.
-
-## Local development build
-Install Flutter stable and Android Studio/Android SDK, then run:
-
-```bash
-flutter create . --platforms=android --org com.finledger --project-name finledger
-cp android_overrides/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-mkdir -p android/app/src/main/kotlin/com/finledger/finledger
-cp android_overrides/MainActivity.kt android/app/src/main/kotlin/com/finledger/app/MainActivity.kt
-cp android_overrides/BankSmsReceiver.kt android/app/src/main/kotlin/com/finledger/app/BankSmsReceiver.kt
-flutter pub get
-flutter build apk --release
-```
-
-APK output: `build/app/outputs/flutter-apk/app-release.apk`.
-\n\n## Build fix (Flutter 3.50)\n- Updated deprecated color opacity and dropdown initial-value APIs.\n- Replaced the generated starter widget test that referenced a nonexistent `MyApp` and `material_ui` package.\n- Made SMS queue table creation idempotent to avoid a first-launch schema collision if an SMS arrives before the app opens.\n
-
-## SMS parser improvements
-- Credit-card bill payment confirmations are classified as `TRANSFER`, not `CREDIT`, so they do not inflate income or ordinary expense totals.
-- The account field now includes a detected bank name (from SMS content/sender ID) and masked account suffix when available.
-- Ledger rows display the bank/account label.
-- Re-importing inbox SMS updates an existing matching transaction, including previously misclassified card-payment rows, rather than creating duplicates.
-- Bank identification currently uses sender/body text patterns for common Indian banks; unrecognized senders are labelled `Bank account`.
-
-
-## Credit-card bill duplicate handling
-When the same bill payment generates two SMS messages, the parser retains the bank-account debit as a neutral `TRANSFER` and ignores the credit-card-side `received` / `credited` / `posted` confirmation. This prevents the second message from appearing as income or duplicating the payment in the ledger. Please test against your bank's exact SMS wording.
-
-
-## Phase 2 – SMS ingestion and structured parsing
-- Stores financial SMS source messages in `sms_messages` with a stable deterministic fingerprint.
-- Parses amount, direction, bank, own-account suffix, destination account suffix, UPI ID, payment method, category and bank reference where present.
-- Writes parsed events to `financial_transactions` and source/account/counterparty legs to `transaction_legs`.
-- Keeps the legacy `transactions` table populated so the current screens continue to work.
-- Retains card-side credit-card payment confirmations as SMS records and links them to a matching savings-account payment where the amount and 48-hour window match; otherwise leaves them pending correlation.
-- Acknowledges real-time SMS queue rows only after local persistence succeeds, reducing the chance of losing a message if processing fails.
-- OTP and unrelated SMS are not imported. Ambiguous transaction-like SMS are retained with `REVIEW_REQUIRED` status rather than guessed.
-
-Phase 2 does not yet implement full cross-bank debit/credit matching, own-account transfer classification, or person-name resolution; those belong to the Phase 3 correlation and identity engine.
-
-
-## Phase 5 – Financial reports and relationship balances
-- Adds a six-month cash-flow view, income/expense/transfer summaries, category spend, payment-method breakdown and mapped-party activity.
-- Adds a Loans & Settlements screen for manually recording money lent or borrowed and recording partial/full repayments.
-- Adds `relationship_payments` with a schema v3 → v4 migration so settlement history is retained rather than overwriting the original loan amount.
-- Loan records are separate from bank transactions; users must still record/import the underlying money movement in the ledger.
-
-## Phase 6 – Navigation and transaction experience
-- Adds dedicated Home, Ledger, People & Accounts, Loans, Intelligence, Reports and Settings destinations.
-- Adds a transaction detail view for the currently stored ledger fields.
-- Adds a dedicated review queue for possible transfer matches.
-- Keeps the app offline-first and stores data locally in SQLite.
-
-## Scope and verification
-- The reports are calculated from locally stored records; they are not verified bank balances or official statements.
-- The transaction detail screen currently shows the legacy ledger row. A complete SMS-to-canonical-event audit timeline still requires the importer to backfill legacy IDs and links.
-- This source package has not been compiled by Flutter in this environment. GitHub Actions is the compilation and APK verification step.
+## Notes
+- SMS parsing depends on the wording used by each bank. Validate sample messages from your banks.
+- Names are shown only when present in the SMS; otherwise the available UPI ID/account identifier is used.
+- Imported transactions are not guaranteed to represent a verified bank balance.

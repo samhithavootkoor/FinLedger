@@ -356,6 +356,13 @@ class FinDatabase {
     }
   }
 
+  Future<List<Map<String, Object?>>> allTransactions() async {
+    return (await database).query(
+      'transactions',
+      orderBy: 'date DESC',
+    );
+  }
+
   Future<List<Map<String, Object?>>> transactions(DateTime month) async {
     final start = DateTime(month.year, month.month).millisecondsSinceEpoch;
     final end = DateTime(month.year, month.month + 1).millisecondsSinceEpoch;
