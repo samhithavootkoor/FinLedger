@@ -11,7 +11,9 @@ class TransactionDetailScreen extends StatelessWidget {
     final money = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
     final amount = (transaction['amount'] as num?)?.toDouble() ?? 0;
     final type = (transaction['type'] ?? 'UNKNOWN').toString().toUpperCase();
-    final incoming = type == 'CREDIT';
+    final kind = (transaction['transaction_kind'] ?? '').toString().toUpperCase();
+    final incoming = (transaction['financial_direction'] ?? '').toString().toUpperCase() == 'INCOMING' || type == 'CREDIT';
+    final cardEvent = kind.startsWith('CARD_');
     final date = (transaction['date'] as num?)?.toInt();
     final dateText = date == null ? 'Date unavailable' :
       DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.fromMillisecondsSinceEpoch(date));
@@ -22,7 +24,9 @@ class TransactionDetailScreen extends StatelessWidget {
       body: ListView(padding: const EdgeInsets.all(16), children: [
         Card(child: Padding(padding: const EdgeInsets.all(20), child: Column(
           crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(incoming ? 'MONEY RECEIVED' : type == 'TRANSFER' ? 'TRANSFER' : 'MONEY SENT',
+            Text(cardEvent
+                ? (transaction['category'] ?? 'CREDIT CARD TRANSACTION').toString().toUpperCase()
+                : incoming ? 'MONEY RECEIVED' : type == 'TRANSFER' ? 'TRANSFER' : 'MONEY SENT',
               style: const TextStyle(color: Colors.black54, letterSpacing: 1)),
             const SizedBox(height: 8),
             Text(money.format(amount), style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold,

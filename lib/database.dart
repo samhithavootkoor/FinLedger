@@ -10,7 +10,7 @@ class FinDatabase {
   FinDatabase._();
 
   static final instance = FinDatabase._();
-  static const int schemaVersion = 4;
+  static const int schemaVersion = 6;
 
   Database? _db;
 
@@ -39,8 +39,106 @@ class FinDatabase {
         if (oldVersion < 4) {
           await _createRelationshipPaymentTable(db);
         }
+        if (oldVersion < 5) {
+          await _addTransactionClassificationColumns(db);
+        }
+        if (oldVersion < 6) {
+          await _reclassifyExistingCardTransactions(db);
+        }
       },
     );
+  }
+
+  Future<void> _addTransactionClassificationColumns(DatabaseExecutor db) async {
+    // Some upgrade paths create these tables immediately before this migration.
+    // Check the actual schema so the migration is safe for both old and fresh
+    // databases and never attempts to add a column twice.
+    Future<void> addIfMissing(String table, String column, String definition) async {
+      final columns = await db.rawQuery('PRAGMA table_info($table)');
+      final exists = columns.any((row) => row['name'] == column);
+      if (!exists) {
+        await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+      }
+    }
+
+    await addIfMissing('transactions', 'transaction_kind',
+        "TEXT NOT NULL DEFAULT 'BANK_TRANSACTION'");
+    await addIfMissing('transactions', 'financial_direction',
+        "TEXT NOT NULL DEFAULT 'UNKNOWN'");
+    await addIfMissing('financial_transactions', 'transaction_kind',
+        "TEXT NOT NULL DEFAULT 'BANK_TRANSACTION'");
+    await addIfMissing('financial_transactions', 'financial_direction',
+        "TEXT NOT NULL DEFAULT 'UNKNOWN'");
+  }
+
+  Future<void> _reclassifyExistingCardTransactions(DatabaseExecutor db) async {
+    // Correct already-imported credit-card SMS rows on upgrade. A card-side
+    // credit/payment confirmation is not bank income; a card purchase is not
+    // a bank-account credit or debit.
+    await db.execute('''
+      UPDATE transactions
+      SET transaction_kind = 'CARD_PURCHASE',
+          financial_direction = 'NONE',
+          type = 'CARD_PURCHASE',
+          category = 'Credit Card Purchase'
+      WHERE lower(coalesce(description, '')) LIKE '%credit card%'
+        AND (
+          lower(coalesce(description, '')) LIKE '%purchase%'
+          OR lower(coalesce(description, '')) LIKE '%spent%'
+          OR lower(coalesce(description, '')) LIKE '%charged%'
+          OR lower(coalesce(description, '')) LIKE '%transaction%'
+          OR lower(coalesce(description, '')) LIKE '%used%'
+        )
+        AND lower(coalesce(description, '')) NOT LIKE '%bill payment%'
+        AND lower(coalesce(description, '')) NOT LIKE '%payment received%'
+    ''');
+    await db.execute('''
+      UPDATE transactions
+      SET transaction_kind = 'CARD_PAYMENT_CONFIRMATION',
+          financial_direction = 'NONE',
+          type = 'CARD_CONFIRMATION',
+          category = 'Credit Card Payment Confirmation'
+      WHERE lower(coalesce(description, '')) LIKE '%credit card%'
+        AND (
+          lower(coalesce(description, '')) LIKE '%payment received%'
+          OR lower(coalesce(description, '')) LIKE '%payment credited%'
+          OR lower(coalesce(description, '')) LIKE '%thank you for your payment%'
+        )
+        AND lower(coalesce(description, '')) NOT LIKE '%debited%'
+        AND lower(coalesce(description, '')) NOT LIKE '%paid from%'
+    ''');
+    await db.execute('''
+      UPDATE financial_transactions
+      SET transaction_kind = 'CARD_PURCHASE',
+          financial_direction = 'NONE',
+          direction = 'NONE',
+          category = 'Credit Card Purchase'
+      WHERE lower(coalesce(narration, description, '')) LIKE '%credit card%'
+        AND (
+          lower(coalesce(narration, description, '')) LIKE '%purchase%'
+          OR lower(coalesce(narration, description, '')) LIKE '%spent%'
+          OR lower(coalesce(narration, description, '')) LIKE '%charged%'
+          OR lower(coalesce(narration, description, '')) LIKE '%transaction%'
+          OR lower(coalesce(narration, description, '')) LIKE '%used%'
+        )
+        AND lower(coalesce(narration, description, '')) NOT LIKE '%bill payment%'
+        AND lower(coalesce(narration, description, '')) NOT LIKE '%payment received%'
+    ''');
+    await db.execute('''
+      UPDATE financial_transactions
+      SET transaction_kind = 'CARD_PAYMENT_CONFIRMATION',
+          financial_direction = 'NONE',
+          direction = 'NONE',
+          category = 'Credit Card Payment Confirmation'
+      WHERE lower(coalesce(narration, description, '')) LIKE '%credit card%'
+        AND (
+          lower(coalesce(narration, description, '')) LIKE '%payment received%'
+          OR lower(coalesce(narration, description, '')) LIKE '%payment credited%'
+          OR lower(coalesce(narration, description, '')) LIKE '%thank you for your payment%'
+        )
+        AND lower(coalesce(narration, description, '')) NOT LIKE '%debited%'
+        AND lower(coalesce(narration, description, '')) NOT LIKE '%paid from%'
+    ''');
   }
 
   Future<void> _createLegacyTables(DatabaseExecutor db) async {
@@ -56,7 +154,9 @@ class FinDatabase {
         mode TEXT,
         account TEXT,
         fingerprint TEXT UNIQUE,
-        source TEXT
+        source TEXT,
+        transaction_kind TEXT NOT NULL DEFAULT 'BANK_TRANSACTION',
+        financial_direction TEXT NOT NULL DEFAULT 'UNKNOWN'
       )
     ''');
 
@@ -148,6 +248,8 @@ class FinDatabase {
         source TEXT NOT NULL DEFAULT 'SMS',
         fingerprint TEXT UNIQUE,
         legacy_transaction_id INTEGER UNIQUE,
+        transaction_kind TEXT NOT NULL DEFAULT 'BANK_TRANSACTION',
+        financial_direction TEXT NOT NULL DEFAULT 'UNKNOWN',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )

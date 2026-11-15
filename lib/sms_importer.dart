@@ -129,10 +129,13 @@ class SmsImporter {
           },
           conflictAlgorithm: ConflictAlgorithm.ignore,
         );
-        await _writeTransactionLegs(txn, transactionId, parsed);
+        if (parsed.financialDirection != 'NONE') {
+          await _writeTransactionLegs(txn, transactionId, parsed);
+        }
         final accountRows = await txn.query('transaction_legs', columns: ['account_id'],
           where: 'transaction_id = ? AND account_id IS NOT NULL', whereArgs: [transactionId], limit: 1);
-        await TransactionIntelligence.evaluate(
+        if (parsed.financialDirection != 'NONE') {
+          await TransactionIntelligence.evaluate(
           db: txn,
           transactionId: transactionId,
           amountMinor: (parsed.amount * 100).round(),
@@ -141,7 +144,8 @@ class SmsImporter {
           ownAccountId: accountRows.isEmpty ? null : (accountRows.first['account_id'] as num).toInt(),
           reference: parsed.reference,
           counterpartyIdentifier: parsed.upiId ?? (parsed.destinationAccountSuffix == null ? null : 'account:${parsed.destinationAccountSuffix}'),
-        );
+          );
+        }
         await _upsertLegacyTransaction(txn, parsed);
         if (parsed.isCardBill) {
           await _linkPendingCardConfirmations(txn, transactionId, parsed, now);
@@ -168,32 +172,72 @@ class SmsImporter {
       r'(credit\s*card|card\s*(?:bill|payment|account)).{0,100}(payment|bill|paid|received|credited)|'
       r'(payment|bill|paid|received|credited).{0,100}(credit\s*card|card\s*(?:bill|account))',
     ).hasMatch(lower);
+    final mentionsCreditCard = RegExp(
+      r'\b(credit\s*card|card\s*(?:ending|no\.?|number|xx|\*{2,})|card\s*account)\b',
+    ).hasMatch(lower);
     final debit = RegExp(r'\b(debited|withdrawn|spent|purchase|paid)\b').hasMatch(lower);
     final credit = RegExp(r'\b(credited|deposited|received|refund|cashback)\b').hasMatch(lower);
     final reversal = RegExp(r'\b(refund|reversed|reversal|cashback)\b').hasMatch(lower);
-
+    final cardPurchase = mentionsCreditCard &&
+        RegExp(r'\b(purchase|spent|transaction|used|charged|debited)\b').hasMatch(lower) &&
+        !isCardBill;
+    final cardRefund = mentionsCreditCard && reversal && !isCardBill;
     final isCardSideReceipt = isCardBill && !debit &&
         RegExp(r'\b(received|credited|posted|thank you|payment successful)\b').hasMatch(lower);
 
     String direction;
     String legacyType;
     String category;
-    if (isCardBill) {
-      direction = 'TRANSFER';
-      legacyType = 'TRANSFER';
+    String transactionKind;
+    String financialDirection;
+    if (cardPurchase) {
+      // A credit-card purchase changes card liability, not the bank-account
+      // cash balance. Keep it visible but never classify it as bank income.
+      direction = 'NONE';
+      legacyType = 'CARD_PURCHASE';
+      category = 'Credit Card Purchase';
+      transactionKind = 'CARD_PURCHASE';
+      financialDirection = 'NONE';
+    } else if (cardRefund) {
+      direction = 'NONE';
+      legacyType = 'CARD_REFUND';
+      category = 'Credit Card Refund';
+      transactionKind = 'CARD_REFUND';
+      financialDirection = 'NONE';
+    } else if (isCardBill && isCardSideReceipt) {
+      direction = 'NONE';
+      legacyType = 'CARD_CONFIRMATION';
+      category = 'Credit Card Payment Confirmation';
+      transactionKind = 'CARD_PAYMENT_CONFIRMATION';
+      financialDirection = 'NONE';
+    } else if (isCardBill && debit) {
+      // The bank-account debit is the actual cash movement. The card-side
+      // "payment received" SMS is retained and linked as supporting evidence.
+      direction = 'OUTGOING';
+      legacyType = 'DEBIT';
       category = 'Credit Card Payment';
+      transactionKind = 'CARD_PAYMENT';
+      financialDirection = 'OUTGOING';
+    } else if (isCardBill) {
+      return ParsedBankSms.unclassified(body, sender, date, amount, isCardSideReceipt);
     } else if (reversal || (credit && !debit)) {
       direction = 'INCOMING';
       legacyType = 'CREDIT';
       category = reversal ? 'Refund' : _category(body);
+      transactionKind = reversal ? 'BANK_REVERSAL' : 'BANK_CREDIT';
+      financialDirection = 'INCOMING';
     } else if (debit && !credit) {
       direction = 'OUTGOING';
       legacyType = 'DEBIT';
       category = _category(body);
+      transactionKind = 'BANK_DEBIT';
+      financialDirection = 'OUTGOING';
     } else if (RegExp(r'\b(transferred|transfer)\b').hasMatch(lower)) {
       direction = 'TRANSFER';
       legacyType = 'TRANSFER';
       category = 'Transfer';
+      transactionKind = 'BANK_TRANSFER';
+      financialDirection = 'INTERNAL';
     } else {
       return ParsedBankSms.unclassified(body, sender, date, amount, isCardSideReceipt);
     }
@@ -228,6 +272,8 @@ class SmsImporter {
       direction: direction,
       legacyType: legacyType,
       category: category,
+      transactionKind: transactionKind,
+      financialDirection: financialDirection,
       bankName: bank,
       ownAccountSuffix: ownSuffix,
       destinationAccountSuffix: destinationSuffix,
@@ -273,7 +319,7 @@ class SmsImporter {
       }
     }
 
-    return await txn.insert('financial_transactions', {
+    final insertedId = await txn.insert('financial_transactions', {
       'amount_minor': (sms.amount * 100).round(),
       'currency': 'INR',
       'direction': sms.direction,
@@ -287,9 +333,39 @@ class SmsImporter {
       'source': 'SMS',
       'fingerprint': sms.fingerprint,
       'legacy_transaction_id': null,
+      'transaction_kind': sms.transactionKind,
+      'financial_direction': sms.financialDirection,
       'created_at': now,
       'updated_at': now,
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
+
+    // INSERT OR IGNORE returns -1 when a unique fingerprint/reference race
+    // or a previously stored event prevents insertion. Resolve the existing
+    // row instead of allowing an invalid transaction id to reach later writes.
+    if (insertedId > 0) return insertedId;
+    final racedOrExisting = await txn.query(
+      'financial_transactions',
+      columns: ['id'],
+      where: 'fingerprint = ?',
+      whereArgs: [sms.fingerprint],
+      limit: 1,
+    );
+    if (racedOrExisting.isNotEmpty) {
+      return (racedOrExisting.first['id'] as num).toInt();
+    }
+    if (sms.reference != null) {
+      final byReference = await txn.query(
+        'financial_transactions',
+        columns: ['id'],
+        where: 'reference_number = ? AND amount_minor = ?',
+        whereArgs: [sms.reference, (sms.amount * 100).round()],
+        limit: 1,
+      );
+      if (byReference.isNotEmpty) {
+        return (byReference.first['id'] as num).toInt();
+      }
+    }
+    throw StateError('Could not resolve transaction after duplicate insert was ignored.');
   }
 
   static Future<void> _writeTransactionLegs(Transaction txn, int transactionId, ParsedBankSms sms) async {
@@ -378,6 +454,8 @@ class SmsImporter {
       'account': sms.accountDisplay,
       'fingerprint': legacyFingerprint,
       'source': 'SMS',
+      'transaction_kind': sms.transactionKind,
+      'financial_direction': sms.financialDirection,
     };
     int legacyId;
     if (existing.isEmpty) {
@@ -392,12 +470,27 @@ class SmsImporter {
       legacyId = (existing.first['id'] as num).toInt();
       await txn.update('transactions', row, where: 'id = ?', whereArgs: [legacyId]);
     }
-    await txn.update(
+    // legacy_transaction_id is UNIQUE. A reference can occasionally match
+    // historical duplicate canonical rows, so do not bulk-update multiple
+    // rows to the same legacy id. Resolve one canonical event and use
+    // UPDATE OR IGNORE to preserve the rest of the import if it is already
+    // associated with another legacy row.
+    final canonicalRows = await txn.query(
       'financial_transactions',
-      {'legacy_transaction_id': legacyId, 'updated_at': DateTime.now().millisecondsSinceEpoch},
-      where: 'fingerprint = ? OR (reference_number = ? AND amount_minor = ?)',
-      whereArgs: [sms.fingerprint, sms.reference, (sms.amount * 100).round()],
+      columns: ['id'],
+      where: 'fingerprint = ?',
+      whereArgs: [sms.fingerprint],
+      limit: 1,
     );
+    final canonicalId = canonicalRows.isNotEmpty
+        ? (canonicalRows.first['id'] as num).toInt()
+        : null;
+    if (canonicalId != null) {
+      await txn.rawUpdate(
+        'UPDATE OR IGNORE financial_transactions SET legacy_transaction_id = ?, updated_at = ? WHERE id = ?',
+        [legacyId, DateTime.now().millisecondsSinceEpoch, canonicalId],
+      );
+    }
   }
 
   static Future<void> _linkPendingCardConfirmations(
@@ -585,6 +678,8 @@ class ParsedBankSms {
     required this.direction,
     required this.legacyType,
     required this.category,
+    required this.transactionKind,
+    required this.financialDirection,
     required this.bankName,
     required this.ownAccountSuffix,
     required this.destinationAccountSuffix,
@@ -601,7 +696,8 @@ class ParsedBankSms {
 
   factory ParsedBankSms.unclassified(String body, String sender, int date, double amount, bool cardSide) => ParsedBankSms(
     body: body, sender: sender, date: date, amount: amount,
-    direction: 'UNKNOWN', legacyType: 'TRANSFER', category: 'Review',
+    direction: 'UNKNOWN', legacyType: 'REVIEW', category: 'Review',
+    transactionKind: 'NEEDS_REVIEW', financialDirection: 'UNKNOWN',
     bankName: null, ownAccountSuffix: null, destinationAccountSuffix: null,
     upiId: null, reference: null, paymentMethod: 'BANK', merchant: '',
     accountDisplay: 'Bank account', fingerprint: 'review-${date ~/ 60000}-${amount.toStringAsFixed(2)}',
@@ -615,6 +711,8 @@ class ParsedBankSms {
   final String direction;
   final String legacyType;
   final String category;
+  final String transactionKind;
+  final String financialDirection;
   final String? bankName;
   final String? ownAccountSuffix;
   final String? destinationAccountSuffix;

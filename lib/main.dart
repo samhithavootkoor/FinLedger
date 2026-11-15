@@ -103,8 +103,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   }
 
   List<String> get _methods {
-    final values = _all.map((r) => (r['mode'] ?? '').toString().toUpperCase())
-      .where((v) => v.isNotEmpty).toSet().toList()..sort();
+    final values = _all.map((r) {
+      final kind = (r['transaction_kind'] ?? '').toString().toUpperCase();
+      if (kind.startsWith('CARD_')) return 'CREDIT CARD';
+      return (r['mode'] ?? '').toString().toUpperCase();
+    }).where((v) => v.isNotEmpty).toSet().toList()..sort();
     return ['All types', ...values];
   }
 
@@ -119,13 +122,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
     final q = _search.text.trim().toLowerCase();
     return _all.where((r) {
       final bank = _bankFrom(r);
-      final method = (r['mode'] ?? '').toString().toUpperCase();
+      final kind = (r['transaction_kind'] ?? '').toString().toUpperCase();
+      final method = kind.startsWith('CARD_') ? 'CREDIT CARD' : (r['mode'] ?? '').toString().toUpperCase();
+      final direction = (r['financial_direction'] ?? '').toString().toUpperCase();
       final type = (r['type'] ?? '').toString().toUpperCase();
       final date = DateTime.fromMillisecondsSinceEpoch((r['date'] as num).toInt());
       if (_bank != 'All banks' && bank != _bank) return false;
       if (_method != 'All types' && method != _method) return false;
-      if (_direction == 'Received' && type != 'CREDIT') return false;
-      if (_direction == 'Sent' && type != 'DEBIT') return false;
+      if (_direction == 'Received' && direction != 'INCOMING' && type != 'CREDIT') return false;
+      if (_direction == 'Sent' && direction != 'OUTGOING' && type != 'DEBIT') return false;
       if (_from != null && date.isBefore(DateTime(_from!.year, _from!.month, _from!.day))) return false;
       if (_to != null && date.isAfter(DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59))) return false;
       if (q.isNotEmpty) {
@@ -250,15 +255,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
 
   Widget _transactionTile(Map<String, Object?> row) {
     final type = (row['type'] ?? 'UNKNOWN').toString().toUpperCase();
-    final incoming = type == 'CREDIT';
-    final transfer = type == 'TRANSFER';
+    final kind = (row['transaction_kind'] ?? '').toString().toUpperCase();
+    final incoming = (row['financial_direction'] ?? '').toString().toUpperCase() == 'INCOMING' || type == 'CREDIT';
+    final card = kind.startsWith('CARD_');
+    final cardNonCash = kind == 'CARD_PURCHASE' || kind == 'CARD_REFUND' || kind == 'CARD_PAYMENT_CONFIRMATION';
+    final transfer = type == 'TRANSFER' || (row['financial_direction'] ?? '').toString() == 'INTERNAL';
     final color = incoming ? Colors.green.shade700 : transfer ? Colors.blueGrey : Colors.deepOrange.shade700;
     final amount = (row['amount'] as num?)?.toDouble() ?? 0;
     final date = DateTime.fromMillisecondsSinceEpoch((row['date'] as num).toInt());
     final person = (row['merchant'] ?? '').toString().trim();
     final account = (row['account'] ?? '').toString();
     final method = (row['mode'] ?? 'BANK').toString();
-    final heading = person.isNotEmpty ? person : (incoming ? 'Money received' : 'Money sent');
+    final heading = person.isNotEmpty ? person : (card
+        ? (row['category'] ?? 'Credit card transaction').toString()
+        : incoming ? 'Money received' : 'Money sent');
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
@@ -266,13 +276,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => TransactionDetailScreen(transaction: row))),
         leading: CircleAvatar(
           backgroundColor: color.withValues(alpha: .12),
-          child: Icon(incoming ? Icons.arrow_downward : Icons.arrow_upward, color: color),
+          child: Icon(card ? Icons.credit_card : incoming ? Icons.arrow_downward : Icons.arrow_upward, color: color),
         ),
         title: Text(heading, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
         subtitle: Text('${_bankFrom(row)} · $method · ${DateFormat('dd MMM yyyy, hh:mm a').format(date)}\n$account',
           maxLines: 2, overflow: TextOverflow.ellipsis),
         isThreeLine: true,
-        trailing: Text('${incoming ? '+' : transfer ? '↔' : '−'}${_money.format(amount)}',
+        trailing: Text('${cardNonCash ? '' : incoming ? '+' : transfer ? '↔' : '−'}${_money.format(amount)}',
           style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 13)),
       ),
     );
