@@ -10,7 +10,7 @@ class FinDatabase {
   FinDatabase._();
 
   static final instance = FinDatabase._();
-  static const int schemaVersion = 3;
+  static const int schemaVersion = 4;
 
   Database? _db;
 
@@ -25,6 +25,7 @@ class FinDatabase {
         await _createLegacyTables(db);
         await _createLedgerTables(db);
         await _createIntelligenceTables(db);
+        await _createRelationshipPaymentTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -34,6 +35,9 @@ class FinDatabase {
         }
         if (oldVersion < 3) {
           await _createIntelligenceTables(db);
+        }
+        if (oldVersion < 4) {
+          await _createRelationshipPaymentTable(db);
         }
       },
     );
@@ -237,6 +241,24 @@ class FinDatabase {
       )
     ''');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_match_candidates_status ON transaction_match_candidates(status)');
+  }
+
+
+  Future<void> _createRelationshipPaymentTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS relationship_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        relationship_id INTEGER NOT NULL,
+        amount_minor INTEGER NOT NULL,
+        payment_date INTEGER NOT NULL,
+        notes TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(relationship_id) REFERENCES party_relationships(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_relationship_payments_relationship ON relationship_payments(relationship_id)',
+    );
   }
 
   /// Copies old app transactions into the new canonical table.

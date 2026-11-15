@@ -65,3 +65,21 @@ When the same bill payment generates two SMS messages, the parser retains the ba
 - OTP and unrelated SMS are not imported. Ambiguous transaction-like SMS are retained with `REVIEW_REQUIRED` status rather than guessed.
 
 Phase 2 does not yet implement full cross-bank debit/credit matching, own-account transfer classification, or person-name resolution; those belong to the Phase 3 correlation and identity engine.
+
+
+## Phase 5 – Financial reports and relationship balances
+- Adds a six-month cash-flow view, income/expense/transfer summaries, category spend, payment-method breakdown and mapped-party activity.
+- Adds a Loans & Settlements screen for manually recording money lent or borrowed and recording partial/full repayments.
+- Adds `relationship_payments` with a schema v3 → v4 migration so settlement history is retained rather than overwriting the original loan amount.
+- Loan records are separate from bank transactions; users must still record/import the underlying money movement in the ledger.
+
+## Phase 6 – Navigation and transaction experience
+- Adds dedicated Home, Ledger, People & Accounts, Loans, Intelligence, Reports and Settings destinations.
+- Adds a transaction detail view for the currently stored ledger fields.
+- Adds a dedicated review queue for possible transfer matches.
+- Keeps the app offline-first and stores data locally in SQLite.
+
+## Scope and verification
+- The reports are calculated from locally stored records; they are not verified bank balances or official statements.
+- The transaction detail screen currently shows the legacy ledger row. A complete SMS-to-canonical-event audit timeline still requires the importer to backfill legacy IDs and links.
+- This source package has not been compiled by Flutter in this environment. GitHub Actions is the compilation and APK verification step.

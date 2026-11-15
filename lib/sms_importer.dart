@@ -379,11 +379,25 @@ class SmsImporter {
       'fingerprint': legacyFingerprint,
       'source': 'SMS',
     };
+    int legacyId;
     if (existing.isEmpty) {
-      await txn.insert('transactions', row, conflictAlgorithm: ConflictAlgorithm.ignore);
+      legacyId = await txn.insert('transactions', row, conflictAlgorithm: ConflictAlgorithm.ignore);
+      if (legacyId <= 0) {
+        final inserted = await txn.query('transactions', columns: ['id'],
+          where: 'fingerprint = ?', whereArgs: [legacyFingerprint], limit: 1);
+        if (inserted.isEmpty) return;
+        legacyId = (inserted.first['id'] as num).toInt();
+      }
     } else {
-      await txn.update('transactions', row, where: 'fingerprint = ?', whereArgs: [legacyFingerprint]);
+      legacyId = (existing.first['id'] as num).toInt();
+      await txn.update('transactions', row, where: 'id = ?', whereArgs: [legacyId]);
     }
+    await txn.update(
+      'financial_transactions',
+      {'legacy_transaction_id': legacyId, 'updated_at': DateTime.now().millisecondsSinceEpoch},
+      where: 'fingerprint = ? OR (reference_number = ? AND amount_minor = ?)',
+      whereArgs: [sms.fingerprint, sms.reference, (sms.amount * 100).round()],
+    );
   }
 
   static Future<void> _linkPendingCardConfirmations(
