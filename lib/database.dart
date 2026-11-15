@@ -293,14 +293,14 @@ class FinDatabase {
         limit: 1,
       );
       if (existing.isNotEmpty) {
-        return db.update(
+        return await db.update(
           'transactions',
           row,
           where: 'fingerprint = ?',
           whereArgs: [fingerprint],
         );
       }
-      return db.insert(
+      return await db.insert(
         'transactions',
         row,
         conflictAlgorithm: ConflictAlgorithm.ignore,
