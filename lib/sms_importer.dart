@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'database.dart';
+import 'transaction_intelligence.dart';
 
 /// Phase 2: preserves each financial SMS and writes parsed financial events
 /// into the canonical ledger while maintaining the legacy table for the UI.
@@ -129,6 +130,18 @@ class SmsImporter {
           conflictAlgorithm: ConflictAlgorithm.ignore,
         );
         await _writeTransactionLegs(txn, transactionId, parsed);
+        final accountRows = await txn.query('transaction_legs', columns: ['account_id'],
+          where: 'transaction_id = ? AND account_id IS NOT NULL', whereArgs: [transactionId], limit: 1);
+        await TransactionIntelligence.evaluate(
+          db: txn,
+          transactionId: transactionId,
+          amountMinor: (parsed.amount * 100).round(),
+          direction: parsed.direction,
+          date: parsed.date,
+          ownAccountId: accountRows.isEmpty ? null : (accountRows.first['account_id'] as num).toInt(),
+          reference: parsed.reference,
+          counterpartyIdentifier: parsed.upiId ?? (parsed.destinationAccountSuffix == null ? null : 'account:${parsed.destinationAccountSuffix}'),
+        );
         await _upsertLegacyTransaction(txn, parsed);
         if (parsed.isCardBill) {
           await _linkPendingCardConfirmations(txn, transactionId, parsed, now);
@@ -249,7 +262,15 @@ class SmsImporter {
         whereArgs: [sms.reference, (sms.amount * 100).round()],
         limit: 1,
       );
-      if (byReference.isNotEmpty) return (byReference.first['id'] as num).toInt();
+      if (byReference.isNotEmpty) {
+        final matchedId = (byReference.first['id'] as num).toInt();
+        final existingDirection = (await txn.query('financial_transactions', columns: ['direction'], where: 'id = ?', whereArgs: [matchedId], limit: 1)).first['direction']?.toString();
+        if ((existingDirection == 'INCOMING' && sms.direction == 'OUTGOING') ||
+            (existingDirection == 'OUTGOING' && sms.direction == 'INCOMING')) {
+          await txn.update('financial_transactions', {'direction': 'TRANSFER', 'updated_at': now}, where: 'id = ?', whereArgs: [matchedId]);
+        }
+        return matchedId;
+      }
     }
 
     return await txn.insert('financial_transactions', {

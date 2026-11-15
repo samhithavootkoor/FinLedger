@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'database.dart';
 import 'sms_importer.dart';
+import 'people_accounts_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,11 +51,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _message(String value) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(value))); }
   Future<void> _add() async { final changed = await Navigator.push<bool>(context, MaterialPageRoute(builder: (_) => const AddTransactionScreen())); if (changed == true) _load(); }
   @override Widget build(BuildContext context) {
-    final title = ['Overview', 'Ledger', 'Reports', 'Settings'][tab];
+    final title = ['Overview', 'Ledger', 'People & Accounts', 'Reports', 'Settings'][tab];
     return Scaffold(appBar: AppBar(title: Text('FinLedger · $title', style: const TextStyle(fontWeight: FontWeight.w700)), actions: [if(tab < 2) IconButton(onPressed: importing ? null : _import, tooltip: 'Import bank SMS', icon: importing ? const SizedBox(width:20,height:20,child:CircularProgressIndicator(strokeWidth:2)) : const Icon(Icons.sync))]),
-      body: tab == 3 ? _settings() : tab == 2 ? _reports() : tab == 1 ? _ledger() : _dashboard(),
+      body: tab == 4 ? _settings() : tab == 3 ? _reports() : tab == 2 ? const PeopleAccountsScreen() : tab == 1 ? _ledger() : _dashboard(),
       floatingActionButton: tab < 2 ? FloatingActionButton.extended(onPressed: _add, icon: const Icon(Icons.add), label: const Text('Add transaction')) : null,
-      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (v)=>setState(()=>tab=v), destinations: const [NavigationDestination(icon:Icon(Icons.space_dashboard_outlined),selectedIcon:Icon(Icons.space_dashboard),label:'Home'),NavigationDestination(icon:Icon(Icons.receipt_long_outlined),selectedIcon:Icon(Icons.receipt_long),label:'Ledger'),NavigationDestination(icon:Icon(Icons.bar_chart),label:'Reports'),NavigationDestination(icon:Icon(Icons.settings_outlined),label:'Settings')]),
+      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (v)=>setState(()=>tab=v), destinations: const [NavigationDestination(icon:Icon(Icons.space_dashboard_outlined),selectedIcon:Icon(Icons.space_dashboard),label:'Home'),NavigationDestination(icon:Icon(Icons.receipt_long_outlined),selectedIcon:Icon(Icons.receipt_long),label:'Ledger'),NavigationDestination(icon:Icon(Icons.people_outline),label:'People'),NavigationDestination(icon:Icon(Icons.bar_chart),label:'Reports'),NavigationDestination(icon:Icon(Icons.settings_outlined),label:'Settings')]),
     );
   }
   Widget _monthPicker() => Row(children:[IconButton(onPressed:()=>setState(()=>month=DateTime(month.year,month.month-1)),icon:const Icon(Icons.chevron_left)),Expanded(child:Text(DateFormat('MMMM yyyy').format(month),textAlign:TextAlign.center,style:const TextStyle(fontWeight:FontWeight.w700,fontSize:16))),IconButton(onPressed:()=>setState(()=>month=DateTime(month.year,month.month+1)),icon:const Icon(Icons.chevron_right))]);

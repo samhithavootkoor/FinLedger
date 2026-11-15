@@ -10,7 +10,7 @@ class FinDatabase {
   FinDatabase._();
 
   static final instance = FinDatabase._();
-  static const int schemaVersion = 2;
+  static const int schemaVersion = 3;
 
   Database? _db;
 
@@ -24,12 +24,16 @@ class FinDatabase {
       onCreate: (db, version) async {
         await _createLegacyTables(db);
         await _createLedgerTables(db);
+        await _createIntelligenceTables(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await _createLegacyTables(db);
           await _createLedgerTables(db);
           await _migrateLegacyTransactions(db);
+        }
+        if (oldVersion < 3) {
+          await _createIntelligenceTables(db);
         }
       },
     );
@@ -213,6 +217,26 @@ class FinDatabase {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_party_identifiers_normalized ON party_identifiers(normalized_value)',
     );
+  }
+
+  Future<void> _createIntelligenceTables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS transaction_match_candidates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transaction_id INTEGER NOT NULL,
+        candidate_transaction_id INTEGER NOT NULL,
+        match_type TEXT NOT NULL,
+        confidence TEXT NOT NULL DEFAULT 'LOW',
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'NEEDS_REVIEW',
+        created_at INTEGER NOT NULL,
+        reviewed_at INTEGER,
+        UNIQUE(transaction_id, candidate_transaction_id),
+        FOREIGN KEY(transaction_id) REFERENCES financial_transactions(id) ON DELETE CASCADE,
+        FOREIGN KEY(candidate_transaction_id) REFERENCES financial_transactions(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_match_candidates_status ON transaction_match_candidates(status)');
   }
 
   /// Copies old app transactions into the new canonical table.
