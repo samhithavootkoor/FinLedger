@@ -239,7 +239,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   Widget _dropdown(String label, String value, List<String> options, ValueChanged<String> onChanged) {
     final safe = options.contains(value) ? value : options.first;
     return DropdownButtonFormField<String>(
-      value: safe,
+      initialValue: safe,
       isExpanded: true,
       decoration: InputDecoration(labelText: label, contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))),
