@@ -11,6 +11,7 @@ class BankSmsReceiver : BroadcastReceiver() {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         if (messages.isEmpty()) return
+
         val dbFile = context.getDatabasePath("finledger.db")
         dbFile.parentFile?.mkdirs()
         val db = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
@@ -19,11 +20,14 @@ class BankSmsReceiver : BroadcastReceiver() {
             db.beginTransaction()
             for (sms in messages) {
                 val body = sms.messageBody ?: continue
-                // Queue only likely financial notifications; never persist OTP or unrelated SMS.
                 val lower = body.lowercase()
                 val hasMoney = Regex("(inr|rs\\.?|₹)\\s*[0-9,]+", RegexOption.IGNORE_CASE).containsMatchIn(body)
-                val hasTxn = listOf("debited", "credited", "withdrawn", "deposited", "spent", "received", "transferred", "purchase", "paid").any { lower.contains(it) }
-                val otp = lower.contains("otp") || lower.contains("one time password")
+                val hasTxn = listOf(
+                    "debited", "credited", "withdrawn", "deposited", "spent", "received",
+                    "transferred", "transfer", "purchase", "paid", "payment", "refund",
+                    "reversal", "reversed", "cashback", "imps", "neft", "rtgs", "upi"
+                ).any { lower.contains(it) }
+                val otp = lower.contains("otp") || lower.contains("one time password") || lower.contains("verification code")
                 if (hasMoney && hasTxn && !otp) {
                     val values = android.content.ContentValues().apply {
                         put("sender", sms.originatingAddress ?: "")
@@ -35,6 +39,9 @@ class BankSmsReceiver : BroadcastReceiver() {
             }
             db.setTransactionSuccessful()
             db.endTransaction()
-        } finally { db.close() }
+        } finally {
+            if (db.inTransaction()) db.endTransaction()
+            db.close()
+        }
     }
 }

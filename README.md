@@ -53,3 +53,15 @@ APK output: `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## Credit-card bill duplicate handling
 When the same bill payment generates two SMS messages, the parser retains the bank-account debit as a neutral `TRANSFER` and ignores the credit-card-side `received` / `credited` / `posted` confirmation. This prevents the second message from appearing as income or duplicating the payment in the ledger. Please test against your bank's exact SMS wording.
+
+
+## Phase 2 – SMS ingestion and structured parsing
+- Stores financial SMS source messages in `sms_messages` with a stable deterministic fingerprint.
+- Parses amount, direction, bank, own-account suffix, destination account suffix, UPI ID, payment method, category and bank reference where present.
+- Writes parsed events to `financial_transactions` and source/account/counterparty legs to `transaction_legs`.
+- Keeps the legacy `transactions` table populated so the current screens continue to work.
+- Retains card-side credit-card payment confirmations as SMS records and links them to a matching savings-account payment where the amount and 48-hour window match; otherwise leaves them pending correlation.
+- Acknowledges real-time SMS queue rows only after local persistence succeeds, reducing the chance of losing a message if processing fails.
+- OTP and unrelated SMS are not imported. Ambiguous transaction-like SMS are retained with `REVIEW_REQUIRED` status rather than guessed.
+
+Phase 2 does not yet implement full cross-bank debit/credit matching, own-account transfer classification, or person-name resolution; those belong to the Phase 3 correlation and identity engine.
