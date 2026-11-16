@@ -57,7 +57,17 @@ class SmsImporter {
       final sender = (raw['sender'] ?? '').toString().trim();
       final receivedAt = (raw['date'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
       final inboxId = raw['inboxId']?.toString();
-      if (body.isEmpty || _isOtp(body) || _isPromotionalSms(body)) continue;
+      if (body.isEmpty || _isOtp(body) || _isPromotionalSms(body) || _isCreditCardNonTransactionNotice(body)) continue;
+
+      // The bank's own debit/credit alert is the source of truth for cash
+      // movement. Merchant, wallet and other non-bank SMS can only be retained
+      // as supporting evidence; they must never create ledger transactions.
+      if (!_isBankOriginSms(sender)) {
+        if (_looksFinancial(body)) {
+          await _saveSupplementalSms(db, sender, body, receivedAt, inboxId);
+        }
+        continue;
+      }
 
       final parsed = _parse(body, sender, receivedAt);
       if (parsed == null) {
@@ -560,6 +570,75 @@ class SmsImporter {
     return true;
   }
 
+  /// Only bank-originated SMS are allowed to create cash ledger entries.
+  /// Indian bank sender IDs commonly contain the bank's short name (for
+  /// example VM-HDFCBK or AD-YESBNK).
+  static bool _isBankOriginSms(String sender) => _bankName(sender) != null;
+
+  /// Keeps non-bank financial messages for context and links them to an
+  /// existing bank-confirmed transaction only when amount and time identify
+  /// exactly one possible match. It never creates a financial transaction.
+  static Future<void> _saveSupplementalSms(
+    Database db,
+    String sender,
+    String body,
+    int receivedAt,
+    String? inboxId,
+  ) async {
+    final fingerprint = _smsFingerprint(sender, body, receivedAt);
+    final parsed = _parse(body, sender, receivedAt);
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    await db.transaction((txn) async {
+      final insertedId = await txn.insert(
+        'sms_messages',
+        {
+          'sender_address': sender,
+          'sender_name': null,
+          'body': body,
+          'received_at': receivedAt,
+          'inbox_message_id': inboxId,
+          'sms_fingerprint': fingerprint,
+          'is_financial': 1,
+          'processing_status': 'SUPPORTING_ONLY',
+          'created_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      if (insertedId <= 0) return;
+      if (parsed == null || parsed.amount <= 0) return;
+
+      final start = receivedAt - const Duration(hours: 48).inMilliseconds;
+      final end = receivedAt + const Duration(hours: 48).inMilliseconds;
+      final candidates = await txn.query(
+        'financial_transactions',
+        columns: ['id'],
+        where: 'amount_minor = ? AND transaction_date BETWEEN ? AND ?',
+        whereArgs: [(parsed.amount * 100).round(), start, end],
+        limit: 2,
+      );
+      // Avoid attaching a merchant receipt to the wrong transaction when
+      // multiple bank-confirmed movements share the same amount nearby.
+      if (candidates.length != 1) return;
+      await txn.insert(
+        'transaction_sms_links',
+        {
+          'transaction_id': candidates.first['id'],
+          'sms_message_id': insertedId,
+          'message_role': 'SUPPORTING',
+          'linked_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      await txn.update(
+        'sms_messages',
+        {'processing_status': 'SUPPORTING_LINKED'},
+        where: 'id = ?',
+        whereArgs: [insertedId],
+      );
+    });
+  }
+
   static Future<void> _saveUnparsedFinancialSms(
     Database db,
     String sender,
@@ -599,6 +678,24 @@ class SmsImporter {
       r'\b(pay now|scan (?:any )?qr|send money|click here|tap here)\b',
     ).hasMatch(text);
     return promotionalOffer && hasCallToAction;
+  }
+
+  /// Credit-card bill reminders and EMI-conversion campaigns are not
+  /// completed cash movements. Ignore them instead of creating ledger or
+  /// review-required entries, even when they contain rupee amounts.
+  static bool _isCreditCardNonTransactionNotice(String body) {
+    final text = body.toLowerCase();
+    final mentionsCreditCard = RegExp(
+      r'\bcredit\s*card\b|\bcard\s*[x*]{2,}\s*\d{2,6}\b',
+    ).hasMatch(text);
+    if (!mentionsCreditCard) return false;
+
+    return RegExp(
+      r'\b(can be paid in parts|convert\s+(?:your\s+)?(?:transactions?|txns?)\s+into\s+emis?|emi conversion|check eligibility)\b|'
+      r'\b(payment|bill)\s+(?:of\s+)?credit\s*card\b.{0,100}\b(due|minimum due|min due|total due)\b|'
+      r'\b(min(?:imum)?\s+due|total\s+due|payment\s+is\s+due|is\s+due\s+on|due\s+date)\b|'
+      r'\bignore\s+if\s+paid\b',
+    ).hasMatch(text);
   }
 
   /// A merchant's confirmation that it received the customer's bill payment
@@ -649,7 +746,7 @@ class SmsImporter {
       'Kotak Mahindra Bank': ['kotak', 'kotakb'],
       'IDFC FIRST Bank': ['idfc', 'idfcbank'],
       'IndusInd Bank': ['indusind'],
-      'Yes Bank': ['yesbank', 'yesb'],
+      'Yes Bank': ['yesbank', 'yesb', 'yesbnk'],
       'Bank of Baroda': ['bob', 'bank of baroda'],
       'Canara Bank': ['canara'],
       'Union Bank of India': ['union bank'],

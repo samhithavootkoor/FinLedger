@@ -33,3 +33,17 @@ The transaction home now has a compact overview, search, quick direction chips, 
 ### SMS classification corrections (November 2026)
 - Merchant/service payment receipts such as Airtel's “we have received a payment … for your plan” are classified as outgoing bill payments, not incoming credits.
 - Promotional SMS containing payment/cashback offers and a call to action (for example POP UPI cashback advertisements) are ignored and do not create ledger or review entries.
+
+### SMS classification updates
+- Credit-card EMI-conversion promotions and bill-due reminders are ignored; they do not create transactions or review-required records.
+- Promotional/payment-call-to-action messages remain excluded from the transaction ledger.
+- Merchant payment receipts are classified from the customer's perspective (for example, a merchant confirming receipt of a bill payment is treated as an outgoing payment).
+
+## SMS source-of-truth rule
+
+Only SMS originating from a recognized bank sender ID can create incoming, outgoing, or transfer ledger entries. Financial messages from merchants, wallets, and other non-bank senders are retained as supporting SMS only; when amount and timestamp match exactly one bank-confirmed transaction, the SMS is linked as supporting evidence. Non-bank messages never create or change ledger cash totals. This rule applies to newly imported messages; it does not automatically rewrite historical transactions already stored on a device.
+
+
+## Clean testing build (schema v7)
+
+On the first launch after upgrading an existing v6 installation, this testing build clears FinLedger's previously imported ledger/database records (transactions, parsed SMS records, accounts, parties, links, and derived intelligence) once. This is intentional so the new bank-confirmation-first parser can be tested from a clean state. It does **not** delete SMS from the Android Messages inbox, change SMS permissions, or uninstall the app. After the upgrade, open FinLedger and tap **Import SMS** to scan the inbox again using the new rules. Do not expect the old in-app transaction history to remain in this test build.

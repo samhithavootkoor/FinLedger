@@ -10,7 +10,7 @@ class FinDatabase {
   FinDatabase._();
 
   static final instance = FinDatabase._();
-  static const int schemaVersion = 6;
+  static const int schemaVersion = 7;
 
   Database? _db;
 
@@ -45,8 +45,38 @@ class FinDatabase {
         if (oldVersion < 6) {
           await _reclassifyExistingCardTransactions(db);
         }
+        if (oldVersion < 7) {
+          // One-time clean slate for the bank-confirmation-first testing build.
+          // Keep the Android SMS inbox untouched; users can re-import it manually.
+          await _clearImportedLedgerData(db);
+        }
       },
     );
+  }
+
+  Future<void> _clearImportedLedgerData(DatabaseExecutor db) async {
+    // Delete dependent records before their parent rows. This intentionally
+    // clears previously imported/classified app data once when upgrading from
+    // schema v6 to v7, so testing starts with a clean ledger. Android's actual
+    // SMS inbox is not touched and can be imported again from the app.
+    const tablesInDeleteOrder = [
+      'relationship_payments',
+      'transaction_match_candidates',
+      'transaction_legs',
+      'transaction_sms_links',
+      'party_relationships',
+      'party_identifiers',
+      'financial_transactions',
+      'sms_messages',
+      'bank_accounts',
+      'parties',
+      'transactions',
+      'sms_queue',
+    ];
+    for (final table in tablesInDeleteOrder) {
+      await db.delete(table);
+    }
+    await db.execute("DELETE FROM sqlite_sequence WHERE name IN (${tablesInDeleteOrder.map((_) => '?').join(',')})", tablesInDeleteOrder);
   }
 
   Future<void> _addTransactionClassificationColumns(DatabaseExecutor db) async {
