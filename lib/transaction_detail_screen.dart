@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 const _detailInk = Color(0xFF172B27);
-const _detailGreen = Color(0xFF16745A);
+// const _detailGreen = Color(0xFF16745A);
 const _detailMuted = Color(0xFF75827E);
 
 class TransactionDetailScreen extends StatelessWidget {
