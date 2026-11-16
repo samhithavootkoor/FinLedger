@@ -115,9 +115,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   }
 
   void _notice(String message) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message), behavior: SnackBarBehavior.floating,
-    ));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(message), behavior: SnackBarBehavior.floating,
+      ));
+    }
   }
 
   String _bankFrom(Map<String, Object?> row) {

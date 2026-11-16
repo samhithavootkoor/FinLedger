@@ -26,7 +26,6 @@ class TransactionDetailScreen extends StatelessWidget {
     final account = (transaction['account'] ?? '').toString();
     final description = (transaction['description'] ?? '').toString();
     final merchant = (transaction['merchant'] ?? '').toString();
-    final color = cardEvent ? const Color(0xFF6755A5) : incoming ? _detailGreen : const Color(0xFFC15D36);
     final heading = cardEvent ? (category.isEmpty ? 'Credit card activity' : category)
       : incoming ? 'Money received' : type == 'TRANSFER' ? 'Account transfer' : 'Money sent';
 
