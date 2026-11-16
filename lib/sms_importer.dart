@@ -57,7 +57,7 @@ class SmsImporter {
       final sender = (raw['sender'] ?? '').toString().trim();
       final receivedAt = (raw['date'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
       final inboxId = raw['inboxId']?.toString();
-      if (body.isEmpty || _isOtp(body)) continue;
+      if (body.isEmpty || _isOtp(body) || _isPromotionalSms(body)) continue;
 
       final parsed = _parse(body, sender, receivedAt);
       if (parsed == null) {
@@ -175,7 +175,8 @@ class SmsImporter {
     final mentionsCreditCard = RegExp(
       r'\b(credit\s*card|card\s*(?:ending|no\.?|number|xx|\*{2,})|card\s*account)\b',
     ).hasMatch(lower);
-    final debit = RegExp(r'\b(debited|withdrawn|spent|purchase|paid)\b').hasMatch(lower);
+    final servicePaymentReceipt = _isServicePaymentReceipt(lower);
+    final debit = RegExp(r'\b(debited|withdrawn|spent|purchase|paid)\b').hasMatch(lower) || servicePaymentReceipt;
     final credit = RegExp(r'\b(credited|deposited|received|refund|cashback)\b').hasMatch(lower);
     final reversal = RegExp(r'\b(refund|reversed|reversal|cashback)\b').hasMatch(lower);
     final cardPurchase = mentionsCreditCard &&
@@ -229,7 +230,7 @@ class SmsImporter {
     } else if (debit && !credit) {
       direction = 'OUTGOING';
       legacyType = 'DEBIT';
-      category = _category(body);
+      category = servicePaymentReceipt ? 'Bills' : _category(body);
       transactionKind = 'BANK_DEBIT';
       financialDirection = 'OUTGOING';
     } else if (RegExp(r'\b(transferred|transfer)\b').hasMatch(lower)) {
@@ -254,7 +255,7 @@ class SmsImporter {
     final upi = _upiId.firstMatch(body)?.group(0);
     final reference = _reference.firstMatch(body)?.group(1);
     final method = _paymentMethod(lower);
-    final merchant = _counterpartyName(body, upi);
+    final merchant = _serviceMerchant(body) ?? _counterpartyName(body, upi);
     final accountDisplay = [
       if (bank != null) bank else 'Bank account',
       if (ownSuffix != null) '••••$ownSuffix',
@@ -582,6 +583,37 @@ class SmsImporter {
       },
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );
+  }
+
+  /// Promotional campaigns mention amounts and payment/cashback language,
+  /// but do not describe a completed transaction. Ignore these before parsing
+  /// or saving them as financial/review SMS records.
+  static bool _isPromotionalSms(String body) {
+    final text = body.toLowerCase();
+    final promotionalOffer = RegExp(
+      r'\b(get|earn|win|grab|unlock)\b.{0,70}\b(flat|instant|extra|upto|up to|cashback|reward|offer|off)\b|'
+      r'\b(flat|instant|extra)\s+rs\.?\s*[0-9,]+\s+(?:instant\s+)?cashback\b|'
+      r'\b(pay now|scan any qr|send money or scan|limited period offer|use promo code)\b',
+    ).hasMatch(text);
+    final hasCallToAction = RegExp(
+      r'\b(pay now|scan (?:any )?qr|send money|click here|tap here)\b',
+    ).hasMatch(text);
+    return promotionalOffer && hasCallToAction;
+  }
+
+  /// A merchant's confirmation that it received the customer's bill payment
+  /// is an outgoing payment from the customer's perspective.
+  static bool _isServicePaymentReceipt(String lowerBody) {
+    return RegExp(
+      r'\bwe have received (?:a )?payment\b.{0,140}\bfor your\b.{0,70}\b(plan|bill|recharge|subscription|account)\b|'
+      r'\bpayment (?:of|for)\b.{0,100}\bfor your\b.{0,70}\b(plan|bill|recharge|subscription)\b',
+    ).hasMatch(lowerBody);
+  }
+
+  static String? _serviceMerchant(String body) {
+    final lower = body.toLowerCase();
+    if (lower.contains('airtel')) return 'Airtel';
+    return null;
   }
 
   static bool _looksFinancial(String body) => RegExp(

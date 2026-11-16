@@ -28,3 +28,8 @@ Loans, settlements, relationship management and financial-planning dashboards ar
 
 ## UI refresh
 The transaction home now has a compact overview, search, quick direction chips, a filter sheet, date-grouped transaction rows, and a redesigned detail view. Transaction parsing and local storage remain unchanged in this UI-only refresh.
+
+
+### SMS classification corrections (November 2026)
+- Merchant/service payment receipts such as Airtel's “we have received a payment … for your plan” are classified as outgoing bill payments, not incoming credits.
+- Promotional SMS containing payment/cashback offers and a call to action (for example POP UPI cashback advertisements) are ignored and do not create ledger or review entries.
