@@ -57,7 +57,8 @@ class SmsImporter {
       final sender = (raw['sender'] ?? '').toString().trim();
       final receivedAt = (raw['date'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
       final inboxId = raw['inboxId']?.toString();
-      if (body.isEmpty || _isOtp(body) || _isPromotionalSms(body) || _isCreditCardNonTransactionNotice(body)) continue;
+      if (body.isEmpty || _isOtp(body) || _isPromotionalSms(body) ||
+          _isCreditCardNonTransactionNotice(body) || _isApplicationOrCardOfferNotice(body)) continue;
 
       // The bank's own debit/credit alert is the source of truth for cash
       // movement. Merchant, wallet and other non-bank SMS can only be retained
@@ -170,8 +171,13 @@ class SmsImporter {
 
   static ParsedBankSms? _parse(String body, String sender, int date) {
     final lower = body.toLowerCase();
+    // A bank-originated message is not automatically a transaction alert.
+    // Only explicit account movement confirmations may create ledger entries.
+    // Words such as received, paid, payment, annual fee or application can
+    // appear in card marketing/application messages and are not proof of cash
+    // movement from/to the user's bank account.
     final hasTransactionLanguage = RegExp(
-      r'\b(debited|credited|withdrawn|deposited|spent|received|transferred|transfer|purchase|paid|payment|refund|reversed|cashback)\b',
+      r'\b(debited|credited|withdrawn|deposited)\b',
     ).hasMatch(lower);
     final amountMatch = _money.firstMatch(body);
     if (!hasTransactionLanguage || amountMatch == null) return null;
@@ -698,6 +704,21 @@ class SmsImporter {
     ).hasMatch(text);
   }
 
+  /// Card application acknowledgements and fee disclosures are not cash
+  /// movement alerts, even if the message says an application was received.
+  static bool _isApplicationOrCardOfferNotice(String body) {
+    final text = body.toLowerCase();
+    final isApplicationNotice = RegExp(
+      r'\b(application|app\.?\s*no\.?|application status|track your application)\b',
+    ).hasMatch(text);
+    final isCardContext = RegExp(r'\b(sbi\s*card|credit\s*card|mastercard|visa card)\b')
+        .hasMatch(text);
+    final hasFeeOrProcessingLanguage = RegExp(
+      r'\b(annual fee|joining fee|processing fee|working days to process|track.*status|eligibility)\b',
+    ).hasMatch(text);
+    return isApplicationNotice && (isCardContext || hasFeeOrProcessingLanguage);
+  }
+
   /// A merchant's confirmation that it received the customer's bill payment
   /// is an outgoing payment from the customer's perspective.
   static bool _isServicePaymentReceipt(String lowerBody) {
@@ -738,6 +759,9 @@ class SmsImporter {
 
   static String? _bankName(String text) {
     final s = text.toLowerCase();
+    // SBI Card is a credit-card issuer/marketing sender, not the State Bank
+    // of India's deposit-account transaction alert channel.
+    if (s.contains('sbicard') || s.contains('sbi card')) return null;
     const banks = <String, List<String>>{
       'HDFC Bank': ['hdfc', 'hdfcbk', 'hdfcbank'],
       'State Bank of India': ['sbi', 'sbin', 'state bank of india'],

@@ -10,7 +10,7 @@ class FinDatabase {
   FinDatabase._();
 
   static final instance = FinDatabase._();
-  static const int schemaVersion = 7;
+  static const int schemaVersion = 8;
 
   Database? _db;
 
@@ -50,8 +50,45 @@ class FinDatabase {
           // Keep the Android SMS inbox untouched; users can re-import it manually.
           await _clearImportedLedgerData(db);
         }
+        if (oldVersion < 8) {
+          // Remove the known SBI Card application/annual-fee false positive
+          // from an already-imported v7 testing database without clearing any
+          // genuine bank transactions or the Android SMS inbox.
+          await _removeSbiCardApplicationFalsePositive(db);
+        }
       },
     );
+  }
+
+  Future<void> _removeSbiCardApplicationFalsePositive(DatabaseExecutor db) async {
+    const legacyWhere = "lower(coalesce(description, '')) LIKE '%sbi card application%' AND lower(coalesce(description, '')) LIKE '%annual fee%'";
+    const smsWhere = "lower(coalesce(body, '')) LIKE '%sbi card application%' AND lower(coalesce(body, '')) LIKE '%annual fee%'";
+
+    // Resolve affected canonical IDs before deleting their SMS links.
+    final affected = await db.rawQuery('''
+      SELECT DISTINCT ft.id
+      FROM financial_transactions ft
+      WHERE ft.legacy_transaction_id IN (
+        SELECT id FROM transactions WHERE $legacyWhere
+      ) OR ft.id IN (
+           SELECT l.transaction_id FROM transaction_sms_links l
+           JOIN sms_messages s ON s.id = l.sms_message_id
+           WHERE $smsWhere
+         )
+    ''');
+    final ids = affected.map((row) => (row['id'] as num).toInt()).toList();
+    if (ids.isNotEmpty) {
+      final placeholders = List.filled(ids.length, '?').join(',');
+      await db.delete('transaction_sms_links', where: 'transaction_id IN ($placeholders)', whereArgs: ids);
+      await db.delete('transaction_legs', where: 'transaction_id IN ($placeholders)', whereArgs: ids);
+      await db.delete('financial_transactions', where: 'id IN ($placeholders)', whereArgs: ids);
+    }
+    await db.execute('DELETE FROM transactions WHERE $legacyWhere');
+    await db.execute('''
+      UPDATE sms_messages
+      SET processing_status = 'IGNORED_NON_TRANSACTION'
+      WHERE $smsWhere
+    ''');
   }
 
   Future<void> _clearImportedLedgerData(DatabaseExecutor db) async {

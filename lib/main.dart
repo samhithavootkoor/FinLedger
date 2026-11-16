@@ -65,10 +65,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   DateTime? _from;
   DateTime? _to;
 
+  DateTime get _defaultFrom => DateTime.now().subtract(const Duration(days: 30));
+  DateTime get _defaultTo => DateTime.now();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Show the most recent 30 days by default on first launch.
+    _from = _defaultFrom;
+    _to = _defaultTo;
     _load();
     _search.addListener(() { if (mounted) setState(() {}); });
   }
@@ -144,23 +150,31 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
     return ['All types', ...values];
   }
 
+  List<Map<String, Object?>> get _dateFiltered {
+    return _all.where((r) {
+      final rawDate = r['date'];
+      final date = DateTime.fromMillisecondsSinceEpoch(rawDate is num ? rawDate.toInt() : 0);
+      if (_from != null && date.isBefore(DateTime(_from!.year, _from!.month, _from!.day))) return false;
+      if (_to != null && date.isAfter(DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59))) return false;
+      return true;
+    }).toList();
+  }
+
+  // The transaction list applies every selected filter. Dashboard totals use
+  // the selected date range, independently of search/direction quick filters.
   List<Map<String, Object?>> get _filtered {
     final q = _search.text.trim().toLowerCase();
-    return _all.where((r) {
+    return _dateFiltered.where((r) {
       final bank = _bankFrom(r);
       final kind = (r['transaction_kind'] ?? '').toString().toUpperCase();
       final method = kind.startsWith('CARD_') ? 'Credit card' :
           ((r['mode'] ?? '').toString().trim().isEmpty ? 'Other' : (r['mode'] ?? '').toString().toUpperCase());
       final direction = (r['financial_direction'] ?? '').toString().toUpperCase();
       final type = (r['type'] ?? '').toString().toUpperCase();
-      final rawDate = r['date'];
-      final date = DateTime.fromMillisecondsSinceEpoch(rawDate is num ? rawDate.toInt() : 0);
       if (_bank != 'All banks' && bank != _bank) return false;
       if (_method != 'All types' && method != _method) return false;
       if (_direction == 'Received' && direction != 'INCOMING' && type != 'CREDIT') return false;
       if (_direction == 'Sent' && direction != 'OUTGOING' && type != 'DEBIT') return false;
-      if (_from != null && date.isBefore(DateTime(_from!.year, _from!.month, _from!.day))) return false;
-      if (_to != null && date.isAfter(DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59))) return false;
       if (q.isNotEmpty) {
         final haystack = [r['merchant'], r['account'], r['description'], r['category'], r['mode'], r['fingerprint']]
           .join(' ').toLowerCase();
@@ -171,7 +185,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   }
 
   double _totalWhere(bool Function(Map<String, Object?>) test) =>
-      _all.where(test).fold<double>(0, (sum, r) => sum + ((r['amount'] as num?)?.toDouble() ?? 0));
+      _dateFiltered.where(test).fold<double>(0, (sum, r) => sum + ((r['amount'] as num?)?.toDouble() ?? 0));
 
   Future<void> _pickDate(bool start) async {
     final selected = await showDatePicker(
@@ -214,7 +228,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
             ]),
             const SizedBox(height: 16),
             Row(children: [
-              TextButton(onPressed: () { setSheet(() { _bank='All banks'; _method='All types'; _direction='All'; _from=null; _to=null; }); setState(() {}); },
+              TextButton(onPressed: () { setSheet(() { _bank='All banks'; _method='All types'; _direction='All'; _from=_defaultFrom; _to=_defaultTo; }); setState(() {}); },
                 child: const Text('Reset')),
               const Spacer(),
               FilledButton(onPressed: () => Navigator.pop(sheetContext), child: const Text('Show results')),
@@ -231,10 +245,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   @override
   Widget build(BuildContext context) {
     final rows = _filtered;
-    final incoming = _totalWhere((r) => (r['financial_direction'] ?? '').toString().toUpperCase() == 'INCOMING' ||
-        (r['type'] ?? '').toString().toUpperCase() == 'CREDIT');
-    final outgoing = _totalWhere((r) => (r['financial_direction'] ?? '').toString().toUpperCase() == 'OUTGOING' ||
-        (r['type'] ?? '').toString().toUpperCase() == 'DEBIT');
+    final incoming = _totalWhere((r) {
+      final direction = (r['financial_direction'] ?? '').toString().toUpperCase();
+      return direction.isNotEmpty ? direction == 'INCOMING' : (r['type'] ?? '').toString().toUpperCase() == 'CREDIT';
+    });
+    final outgoing = _totalWhere((r) {
+      final direction = (r['financial_direction'] ?? '').toString().toUpperCase();
+      return direction.isNotEmpty ? direction == 'OUTGOING' : (r['type'] ?? '').toString().toUpperCase() == 'DEBIT';
+    });
     return Scaffold(
       appBar: AppBar(
         title: const Text('FinLedger'),
@@ -251,7 +269,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
         RefreshIndicator(onRefresh: _load, child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 2, 16, 110),
           children: [
-            _summary(incoming, outgoing),
+            _summary(incoming, outgoing, _dateFiltered.length),
             const SizedBox(height: 18),
             Row(children: [
               Expanded(child: TextField(
@@ -302,7 +320,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
     );
   }
 
-  Widget _summary(double incoming, double outgoing) => Container(
+  Widget _summary(double incoming, double outgoing, int transactionCount) => Container(
     padding: const EdgeInsets.all(18),
     decoration: BoxDecoration(
       gradient: const LinearGradient(colors: [Color(0xFF123F34), Color(0xFF19745B)], begin: Alignment.topLeft, end: Alignment.bottomRight),
@@ -315,7 +333,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
         const SizedBox(width: 10),
         const Text('YOUR TRANSACTION OVERVIEW', style: TextStyle(color: Colors.white70, fontSize: 11, letterSpacing: 1, fontWeight: FontWeight.w700)),
         const Spacer(),
-        Text('${_all.length} SMS', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        Text('${_dateFiltered.length} transactions', style: const TextStyle(color: Colors.white70, fontSize: 11)),
       ]),
       const SizedBox(height: 22),
       const Text('Money received', style: TextStyle(color: Colors.white70, fontSize: 12)),
@@ -325,7 +343,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
       Row(children: [
         Expanded(child: _summaryMini('Money sent', _money.format(outgoing), Icons.arrow_upward_rounded)),
         Container(width: 1, height: 34, color: Colors.white24),
-        Expanded(child: _summaryMini('All transactions', '${_all.length}', Icons.receipt_long_rounded)),
+        Expanded(child: _summaryMini('All transactions', '$transactionCount', Icons.receipt_long_rounded)),
       ]),
     ]),
   );
