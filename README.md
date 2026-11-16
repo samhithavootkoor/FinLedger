@@ -24,3 +24,7 @@ Loans, settlements, relationship management and financial-planning dashboards ar
 - SMS parsing depends on the wording used by each bank. Validate sample messages from your banks.
 - Names are shown only when present in the SMS; otherwise the available UPI ID/account identifier is used.
 - Imported transactions are not guaranteed to represent a verified bank balance.
+
+
+## UI refresh
+The transaction home now has a compact overview, search, quick direction chips, a filter sheet, date-grouped transaction rows, and a redesigned detail view. Transaction parsing and local storage remain unchanged in this UI-only refresh.
