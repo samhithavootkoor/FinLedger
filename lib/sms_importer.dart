@@ -61,15 +61,6 @@ class SmsImporter {
           _isCreditCardNonTransactionNotice(body) || _isApplicationOrCardOfferNotice(body)) {
         continue;
       }
-      // The bank's own debit/credit alert is the source of truth for cash
-      // movement. Merchant, wallet and other non-bank SMS can only be retained
-      // as supporting evidence; they must never create ledger transactions.
-      if (!_isBankOriginSms(sender)) {
-        if (_looksFinancial(body)) {
-          await _saveSupplementalSms(db, sender, body, receivedAt, inboxId);
-        }
-        continue;
-      }
 
       final parsed = _parse(body, sender, receivedAt);
       if (parsed == null) {
@@ -172,13 +163,8 @@ class SmsImporter {
 
   static ParsedBankSms? _parse(String body, String sender, int date) {
     final lower = body.toLowerCase();
-    // A bank-originated message is not automatically a transaction alert.
-    // Only explicit account movement confirmations may create ledger entries.
-    // Words such as received, paid, payment, annual fee or application can
-    // appear in card marketing/application messages and are not proof of cash
-    // movement from/to the user's bank account.
     final hasTransactionLanguage = RegExp(
-      r'\b(debited|credited|withdrawn|deposited)\b',
+      r'\b(debited|credited|withdrawn|deposited|spent|received|transferred|transfer|purchase|paid|payment|refund|reversed|cashback)\b',
     ).hasMatch(lower);
     final amountMatch = _money.firstMatch(body);
     if (!hasTransactionLanguage || amountMatch == null) return null;
@@ -577,75 +563,6 @@ class SmsImporter {
     return true;
   }
 
-  /// Only bank-originated SMS are allowed to create cash ledger entries.
-  /// Indian bank sender IDs commonly contain the bank's short name (for
-  /// example VM-HDFCBK or AD-YESBNK).
-  static bool _isBankOriginSms(String sender) => _bankName(sender) != null;
-
-  /// Keeps non-bank financial messages for context and links them to an
-  /// existing bank-confirmed transaction only when amount and time identify
-  /// exactly one possible match. It never creates a financial transaction.
-  static Future<void> _saveSupplementalSms(
-    Database db,
-    String sender,
-    String body,
-    int receivedAt,
-    String? inboxId,
-  ) async {
-    final fingerprint = _smsFingerprint(sender, body, receivedAt);
-    final parsed = _parse(body, sender, receivedAt);
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    await db.transaction((txn) async {
-      final insertedId = await txn.insert(
-        'sms_messages',
-        {
-          'sender_address': sender,
-          'sender_name': null,
-          'body': body,
-          'received_at': receivedAt,
-          'inbox_message_id': inboxId,
-          'sms_fingerprint': fingerprint,
-          'is_financial': 1,
-          'processing_status': 'SUPPORTING_ONLY',
-          'created_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-      if (insertedId <= 0) return;
-      if (parsed == null || parsed.amount <= 0) return;
-
-      final start = receivedAt - const Duration(hours: 48).inMilliseconds;
-      final end = receivedAt + const Duration(hours: 48).inMilliseconds;
-      final candidates = await txn.query(
-        'financial_transactions',
-        columns: ['id'],
-        where: 'amount_minor = ? AND transaction_date BETWEEN ? AND ?',
-        whereArgs: [(parsed.amount * 100).round(), start, end],
-        limit: 2,
-      );
-      // Avoid attaching a merchant receipt to the wrong transaction when
-      // multiple bank-confirmed movements share the same amount nearby.
-      if (candidates.length != 1) return;
-      await txn.insert(
-        'transaction_sms_links',
-        {
-          'transaction_id': candidates.first['id'],
-          'sms_message_id': insertedId,
-          'message_role': 'SUPPORTING',
-          'linked_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-      await txn.update(
-        'sms_messages',
-        {'processing_status': 'SUPPORTING_LINKED'},
-        where: 'id = ?',
-        whereArgs: [insertedId],
-      );
-    });
-  }
-
   static Future<void> _saveUnparsedFinancialSms(
     Database db,
     String sender,
@@ -705,8 +622,8 @@ class SmsImporter {
     ).hasMatch(text);
   }
 
-  /// Card application acknowledgements and fee disclosures are not cash
-  /// movement alerts, even if the message says an application was received.
+  /// Credit-card application acknowledgements and fee disclosures are not
+  /// completed transactions, even when they say an application was received.
   static bool _isApplicationOrCardOfferNotice(String body) {
     final text = body.toLowerCase();
     final isApplicationNotice = RegExp(
@@ -760,9 +677,6 @@ class SmsImporter {
 
   static String? _bankName(String text) {
     final s = text.toLowerCase();
-    // SBI Card is a credit-card issuer/marketing sender, not the State Bank
-    // of India's deposit-account transaction alert channel.
-    if (s.contains('sbicard') || s.contains('sbi card')) return null;
     const banks = <String, List<String>>{
       'HDFC Bank': ['hdfc', 'hdfcbk', 'hdfcbank'],
       'State Bank of India': ['sbi', 'sbin', 'state bank of india'],
@@ -771,7 +685,7 @@ class SmsImporter {
       'Kotak Mahindra Bank': ['kotak', 'kotakb'],
       'IDFC FIRST Bank': ['idfc', 'idfcbank'],
       'IndusInd Bank': ['indusind'],
-      'Yes Bank': ['yesbank', 'yesb', 'yesbnk'],
+      'Yes Bank': ['yesbank', 'yesb'],
       'Bank of Baroda': ['bob', 'bank of baroda'],
       'Canara Bank': ['canara'],
       'Union Bank of India': ['union bank'],

@@ -72,7 +72,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Show the most recent 30 days by default on first launch.
+    // Default the dashboard and transaction list to the most recent 30 days.
     _from = _defaultFrom;
     _to = _defaultTo;
     _load();
@@ -160,8 +160,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> with WidgetsBin
     }).toList();
   }
 
-  // The transaction list applies every selected filter. Dashboard totals use
-  // the selected date range, independently of search/direction quick filters.
+  // Dashboard totals follow the selected date range, independently of other filters.
   List<Map<String, Object?>> get _filtered {
     final q = _search.text.trim().toLowerCase();
     return _dateFiltered.where((r) {
