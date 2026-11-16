@@ -58,8 +58,9 @@ class SmsImporter {
       final receivedAt = (raw['date'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
       final inboxId = raw['inboxId']?.toString();
       if (body.isEmpty || _isOtp(body) || _isPromotionalSms(body) ||
-          _isCreditCardNonTransactionNotice(body) || _isApplicationOrCardOfferNotice(body)) continue;
-
+          _isCreditCardNonTransactionNotice(body) || _isApplicationOrCardOfferNotice(body)) {
+        continue;
+      }
       // The bank's own debit/credit alert is the source of truth for cash
       // movement. Merchant, wallet and other non-bank SMS can only be retained
       // as supporting evidence; they must never create ledger transactions.
